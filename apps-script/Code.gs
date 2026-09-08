@@ -1,8 +1,11 @@
 /**
  * R&D Rotation intake.
  *
- * Receives { key, name, image } from the GitHub Pages form and appends a row
- * to the spreadsheet, with the photo as a real in-cell image.
+ * Receives { key, name, image, aspect, pages } from the GitHub Pages form and
+ * appends a row to the spreadsheet, with the photo as a real in-cell image.
+ *
+ * A PDF is rasterised in the browser before it gets here: every page is drawn
+ * side by side into one strip, because a cell holds exactly one image.
  *
  * Uses the spreadsheet service only, so the sole scope requested is
  * .../auth/spreadsheets. Nothing here touches your files or mail.
@@ -16,7 +19,8 @@
 
 const SHEET_ID   = '1w-MrnyfrT0Zf2QYaFCdOPifk2wII1ckiWjkH78NO5UM';
 const ROW_HEIGHT = 90;
-const COL_WIDTH  = 120;
+const COL_WIDTH  = 120;   // minimum width of the photo column
+const MAX_COL_W  = 480;   // ceiling, so one long PDF cannot swallow the sheet
 
 // Speed bump only, NOT a secret: the calling page is public, so anyone reading
 // its source can see this value. It deters drive-by posts, nothing more.
@@ -59,6 +63,10 @@ function doPost(e) {
       return json_({ ok: false, error: 'image is required' });
     }
 
+    // Presentation hints. Treat them as untrusted and fall back to sane values.
+    const aspect = Number(body.aspect) > 0 ? Number(body.aspect) : 1;
+    const pages  = Math.max(1, Math.floor(Number(body.pages) || 1));
+
     const sh  = sheet_();
     const row = sh.getLastRow() + 1;
 
@@ -66,11 +74,18 @@ function doPost(e) {
     sh.getRange(row, 2).setValue(
       SpreadsheetApp.newCellImage()
         .setSourceUrl(image)
-        .setAltTextTitle(name)
+        .setAltTextTitle(pages > 1 ? name + ' (' + pages + ' pages)' : name)
         .build()
     );
     sh.setRowHeight(row, ROW_HEIGHT);
-    sh.setColumnWidth(2, COL_WIDTH);
+
+    // A multi-page strip is far wider than it is tall, and an in-cell image is
+    // scaled to fit its cell - so without this the pages become unreadable.
+    // Grow the column to suit the widest entry, but never shrink it back and
+    // never past the ceiling.
+    const wanted = Math.min(MAX_COL_W, Math.max(COL_WIDTH, Math.round(ROW_HEIGHT * aspect)));
+    if (wanted > sh.getColumnWidth(2)) sh.setColumnWidth(2, wanted);
+
     SpreadsheetApp.flush();
 
     return json_({ ok: true, row: row });
