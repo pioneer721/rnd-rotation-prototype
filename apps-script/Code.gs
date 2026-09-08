@@ -27,8 +27,12 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-/** Health check - lets us confirm the deployment is reachable. */
-function doGet() {
+/** Health check, plus a ?probe=1 hook so the one-time probe can be triggered
+ *  over HTTP instead of through the editor's function picker. */
+function doGet(e) {
+  if (e && e.parameter && e.parameter.probe === '1') {
+    return json_({ ok: true, probe: probeImageModes() });
+  }
   return json_({ ok: true, service: 'rnd-rotation' });
 }
 
