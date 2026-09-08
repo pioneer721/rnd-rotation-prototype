@@ -179,6 +179,23 @@
     font-size: 12px;
     color: var(--muted);
   }
+
+  .status {
+    display: none;
+    margin: 14px 0 0;
+    padding: 10px 12px;
+    border-radius: 9px;
+    font-size: 13px;
+    line-height: 1.45;
+  }
+  .status.show { display: block; }
+  .status.busy { background: var(--field); border: 1px solid var(--line); color: var(--muted); }
+  .status.ok   { background: color-mix(in srgb, #16a34a 12%, transparent); border: 1px solid color-mix(in srgb, #16a34a 40%, transparent); color: #15803d; }
+  .status.err  { background: color-mix(in srgb, #dc2626 12%, transparent); border: 1px solid color-mix(in srgb, #dc2626 40%, transparent); color: #b91c1c; }
+  @media (prefers-color-scheme: dark) {
+    .status.ok  { color: #86efac; }
+    .status.err { color: #fca5a5; }
+  }
 </style>
 </head>
 <body>
@@ -216,20 +233,32 @@
   </div>
 
   <button type="submit" id="submit" disabled>Submit</button>
-  <p class="note">Prototype &mdash; not wired up yet.</p>
+  <p class="status" id="status" role="status" aria-live="polite"></p>
+  <p class="note">Adds a row to the R&amp;D Rotation sheet.</p>
 </form>
 
 <script>
-  const form    = document.getElementById('form');
-  const nameEl  = document.getElementById('name');
-  const drop    = document.getElementById('drop');
-  const fileEl  = document.getElementById('file');
-  const preview = document.getElementById('preview');
-  const thumb   = document.getElementById('thumb');
-  const fname   = document.getElementById('fname');
-  const fsize   = document.getElementById('fsize');
-  const remove  = document.getElementById('remove');
-  const submit  = document.getElementById('submit');
+  /* ---------------- config ---------------- */
+  // Apps Script web app deployment (Execute as: me / Who has access: anyone).
+  const ENDPOINT = '__ENDPOINT__';
+  // NOT a secret - this file is public, so anyone can read it. It only deters
+  // drive-by posts; it is not access control.
+  const KEY = 'rnd-rotation-2026';
+  const MAX_DIM = 1200;
+  const JPEG_QUALITY = 0.85;
+  /* ---------------------------------------- */
+
+  const form     = document.getElementById('form');
+  const nameEl   = document.getElementById('name');
+  const drop     = document.getElementById('drop');
+  const fileEl   = document.getElementById('file');
+  const preview  = document.getElementById('preview');
+  const thumb    = document.getElementById('thumb');
+  const fname    = document.getElementById('fname');
+  const fsize    = document.getElementById('fsize');
+  const remove   = document.getElementById('remove');
+  const submit   = document.getElementById('submit');
+  const statusEl = document.getElementById('status');
 
   let objectUrl = null;
 
@@ -237,6 +266,12 @@
     ? (b / 1024).toFixed(0) + ' KB'
     : (b / 1024 / 1024).toFixed(1) + ' MB';
 
+  function setStatus(kind, msg) {
+    statusEl.className = 'status show ' + kind;
+    statusEl.textContent = msg;
+  }
+
+  // Both fields are mandatory - this is what keeps Submit unclickable.
   function sync() {
     submit.disabled = !(nameEl.value.trim() && fileEl.files.length);
   }
@@ -250,6 +285,15 @@
     fsize.textContent = kb(file.size);
     preview.classList.add('show');
     drop.style.display = 'none';
+    sync();
+  }
+
+  function clearFile() {
+    if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
+    fileEl.value = '';
+    thumb.removeAttribute('src');
+    preview.classList.remove('show');
+    drop.style.display = '';
     sync();
   }
 
@@ -273,19 +317,66 @@
 
   fileEl.addEventListener('change', () => show(fileEl.files[0]));
   nameEl.addEventListener('input', sync);
+  remove.addEventListener('click', clearFile);
 
-  remove.addEventListener('click', () => {
-    if (objectUrl) { URL.revokeObjectURL(objectUrl); objectUrl = null; }
-    fileEl.value = '';
-    thumb.removeAttribute('src');
-    preview.classList.remove('show');
-    drop.style.display = '';
-    sync();
-  });
+  // Downscale before upload: base64 inflates the body by ~33%, and a raw phone
+  // photo would be several MB of POST payload for a thumbnail-sized cell.
+  async function toDataUrl(file) {
+    const bmp = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_DIM / Math.max(bmp.width, bmp.height));
+    const w = Math.max(1, Math.round(bmp.width * scale));
+    const h = Math.max(1, Math.round(bmp.height * scale));
+    const c = document.createElement('canvas');
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';          // JPEG has no alpha - avoid black fringing
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(bmp, 0, 0, w, h);
+    if (bmp.close) bmp.close();
+    return c.toDataURL('image/jpeg', JPEG_QUALITY);
+  }
 
-  form.addEventListener('submit', e => {
+  form.addEventListener('submit', async e => {
     e.preventDefault();
-    // No backend yet — UI only.
+    const name = nameEl.value.trim();
+    const file = fileEl.files[0];
+    if (!name || !file) return;      // the disabled button already covers this
+
+    if (ENDPOINT.indexOf('__ENDPOINT__') !== -1) {
+      setStatus('err', 'Backend not configured yet \u2014 the Apps Script web app URL is still missing.');
+      return;
+    }
+
+    submit.disabled = true;
+    submit.textContent = 'Submitting\u2026';
+    setStatus('busy', 'Processing image\u2026');
+
+    try {
+      const image = await toDataUrl(file);
+      setStatus('busy', 'Adding row to the sheet\u2026');
+
+      // text/plain keeps this a CORS "simple request". Apps Script web apps do
+      // not answer preflight OPTIONS, so application/json would fail outright.
+      const res = await fetch(ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ key: KEY, name: name, image: image })
+      });
+
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || 'unknown error');
+
+      setStatus('ok', 'Added \u201c' + name + '\u201d to row ' + data.row + '.');
+      nameEl.value = '';
+      clearFile();
+    } catch (err) {
+      setStatus('err', 'Could not submit: ' + err.message);
+    } finally {
+      submit.textContent = 'Submit';
+      sync();
+    }
   });
 </script>
 
