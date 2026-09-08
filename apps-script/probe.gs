@@ -10,7 +10,7 @@ function sheet_() {
 
 /**
  * Determine which image mechanisms Sheets actually renders in a cell.
- * SpreadsheetApp only - no DriveApp - so this needs only the spreadsheets scope.
+ * Uses the spreadsheet service only, so it needs only the spreadsheets scope.
  */
 function probeImageModes() {
   const sh = sheet_();
