@@ -240,7 +240,7 @@
 <script>
   /* ---------------- config ---------------- */
   // Apps Script web app deployment (Execute as: me / Who has access: anyone).
-  const ENDPOINT = '__ENDPOINT__';
+  const ENDPOINT = 'https://script.google.com/macros/s/AKfycbzOZodGtYV2Opd5Nj5cckIcdCGPQZ7DXzV97mVSYKanBbnSg1dH9z8-4dpD3ubMiGe4PA/exec';
   // NOT a secret - this file is public, so anyone can read it. It only deters
   // drive-by posts; it is not access control.
   const KEY = 'rnd-rotation-2026';
@@ -342,11 +342,6 @@
     const name = nameEl.value.trim();
     const file = fileEl.files[0];
     if (!name || !file) return;      // the disabled button already covers this
-
-    if (ENDPOINT.indexOf('__ENDPOINT__') !== -1) {
-      setStatus('err', 'Backend not configured yet \u2014 the Apps Script web app URL is still missing.');
-      return;
-    }
 
     submit.disabled = true;
     submit.textContent = 'Submitting\u2026';
