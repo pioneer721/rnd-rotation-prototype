@@ -253,6 +253,7 @@
   const PDF_MAX_PAGES = 10;    // pages past this are not drawn
   const GUTTER        = 12;    // gap between pages in the strip
   const MAX_FILE_MB   = 25;
+  const RENDER_MS     = 20000; // per-page backstop so a bad PDF cannot hang us
   const IMG_QUALITY   = 0.85;
   const PDF_QUALITY   = 0.92;  // rendered text needs more than a photo does
 
@@ -303,6 +304,20 @@
     f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
 
   /* ---------------- pdf.js, loaded only when a PDF shows up ------------- */
+
+  // Reject rather than hang forever, and stop the work we gave up waiting on.
+  function withTimeout(promise, ms, message, onTimeout) {
+    let timer;
+    return Promise.race([
+      promise.finally(() => clearTimeout(timer)),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (onTimeout) { try { onTimeout(); } catch (ignore) {} }
+          reject(new Error(message));
+        }, ms);
+      })
+    ]);
+  }
 
   let pdfjsReady = null;
   function loadPdfJs() {
@@ -401,7 +416,15 @@
       const pctx = pc.getContext('2d');
       pctx.fillStyle = '#fff';                  // pages are usually transparent
       pctx.fillRect(0, 0, pc.width, pc.height);
-      await page.render({ canvasContext: pctx, viewport: vp }).promise;
+
+      // intent:'print' matters. The default 'display' path drives itself with
+      // requestAnimationFrame, which a browser never fires while the tab is in
+      // the background - so a user switching tabs mid-upload would hang here
+      // forever. 'print' renders synchronously and is the right intent for
+      // rasterising anyway. Verified: 'display' times out in a hidden tab.
+      const task = page.render({ canvasContext: pctx, viewport: vp, intent: 'print' });
+      await withTimeout(task.promise, RENDER_MS,
+        'page ' + (i + 1) + ' took too long to render', () => task.cancel());
 
       sctx.drawImage(pc, x, 0, w, h);
       sctx.strokeStyle = '#c8ccd2';             // hairline so pages stay distinct
